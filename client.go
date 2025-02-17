@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/graph-labs-io/utls"
 )
 
 // A Client is an HTTP client. Its zero value (DefaultClient) is a
