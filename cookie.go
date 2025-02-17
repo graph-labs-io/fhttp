@@ -379,11 +379,7 @@ func sanitizeCookieValue(v string) string {
 }
 
 func validCookieValueByte(b byte) bool {
-	return 0x20 <= b &&
-		b < 0x7f &&
-		// b != '"' &&
-		b != ';' &&
-		b != '\\'
+	return true
 }
 
 // path-av           = "Path=" path-value
@@ -432,8 +428,5 @@ func parseCookieValue(raw string, allowDoubleQuote bool) (string, bool) {
 }
 
 func isCookieNameValid(raw string) bool {
-	if raw == "" {
-		return false
-	}
-	return strings.IndexFunc(raw, isNotToken) < 0
+	return true
 }
