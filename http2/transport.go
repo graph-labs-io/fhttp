@@ -331,6 +331,10 @@ type ClientConn struct {
 	inflow            flow // peer's conn-level flow control
 	initialWindowSize uint32
 
+	// SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441)
+	// Indicates that the peer supports HTTP/2 over other protocols
+	enableConnectProtocol bool // guarded by mu
+
 	lastActive           time.Time
 	lastIdle             time.Time // time last idle
 	maxConcurrentStreams uint32
@@ -768,6 +772,7 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 		singleUse:             singleUse,
 		wantSettingsAck:       true,
 		pings:                 make(map[[8]byte]chan struct{}),
+		enableConnectProtocol: true,
 	}
 	if d := t.idleConnTimeout(); d != 0 {
 		cc.idleTimeout = d
@@ -1169,6 +1174,34 @@ func (cc *ClientConn) responseHeaderTimeout() time.Duration {
 	return 0
 }
 
+// validateExtendedConnect validates an extended CONNECT request.
+func (cc *ClientConn) validateExtendedConnect(req *http.Request) error {
+	if req.Method != "CONNECT" {
+		return nil
+	}
+
+	hasProtocol := req.Header.Get(":protocol") != ""
+	hasPath := req.URL.Path != ""
+	hasScheme := req.URL.Scheme != ""
+
+	// Standard CONNECT: no :protocol, :path, or :scheme
+	if !hasProtocol && !hasPath && !hasScheme {
+		return nil // Standard CONNECT is always valid
+	}
+
+	// Extended CONNECT features detected
+	if !cc.enableConnectProtocol {
+		return errors.New("http2: extended CONNECT features used but peer doesn't support CONNECT protocol")
+	}
+
+	// Extended CONNECT: must have :protocol
+	if !hasProtocol {
+		return errors.New("http2: extended CONNECT request missing required :protocol pseudo-header")
+	}
+
+	return nil
+}
+
 // checkConnHeaders checks whether req has any invalid connection-level headers.
 // per RFC 7540 section 8.1.2.2: Connection-Specific Header Fields.
 // Certain headers are special-cased as okay but not transmitted later.
@@ -1208,6 +1241,11 @@ func (cc *ClientConn) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func (cc *ClientConn) roundTrip(req *http.Request) (res *http.Response, gotErrAfterReqBodyWrite bool, err error) {
 	if err := checkConnHeaders(req); err != nil {
+		return nil, false, err
+	}
+
+	// Validate extended CONNECT usage
+	if err := cc.validateExtendedConnect(req); err != nil {
 		return nil, false, err
 	}
 
@@ -1686,7 +1724,9 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 	}
 
 	var path string
-	if req.Method != "CONNECT" {
+	isExtendedConnect := req.Method == "CONNECT" && cc.enableConnectProtocol && req.URL.Path != ""
+
+	if req.Method != "CONNECT" || isExtendedConnect {
 		path = req.URL.RequestURI()
 		if !validPseudoPath(path) {
 			orig := path
@@ -1698,6 +1738,16 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 					return nil, fmt.Errorf("invalid request :path %q", orig)
 				}
 			}
+		}
+	}
+
+	if req.Method == "CONNECT" {
+		protocol := req.Header.Get(":protocol")
+		if protocol != "" && !cc.enableConnectProtocol {
+			return nil, errors.New("http2: :protocol pseudo-header in CONNECT request but peer doesn't support CONNECT protocol")
+		}
+		if isExtendedConnect && protocol == "" {
+			return nil, errors.New("http2: extended CONNECT request missing :protocol pseudo-header")
 		}
 	}
 
@@ -1748,16 +1798,20 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				case ":method":
 					f(":method", req.Method)
 				case ":path":
-					if req.Method != "CONNECT" {
+					if req.Method != "CONNECT" || isExtendedConnect {
 						f(":path", path)
 					}
 				case ":scheme":
-					if req.Method != "CONNECT" {
+					if req.Method != "CONNECT" || isExtendedConnect {
 						f(":scheme", req.URL.Scheme)
 					}
-
-				// (zMrKrabz): Currently skips over unrecognized pheader fields,
-				// should throw error or something but works for now.
+				case ":protocol":
+					// Extended CONNECT protocol pseudo-header (RFC 8441)
+					if req.Method == "CONNECT" && isExtendedConnect {
+						if protocol := req.Header.Get(":protocol"); protocol != "" {
+							f(":protocol", protocol)
+						}
+					}
 				default:
 					continue
 				}
@@ -1765,9 +1819,15 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 		} else {
 			f(":authority", host)
 			f(":method", m)
-			if req.Method != "CONNECT" {
+			if req.Method != "CONNECT" || isExtendedConnect {
 				f(":path", path)
 				f(":scheme", req.URL.Scheme)
+			}
+			// Handle :protocol for extended CONNECT
+			if req.Method == "CONNECT" && isExtendedConnect {
+				if protocol := req.Header.Get(":protocol"); protocol != "" {
+					f(":protocol", protocol)
+				}
 			}
 		}
 		if trailers != "" {
@@ -1811,6 +1871,9 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				// Fields, don't send connection-specific
 				// fields. We have already checked if any
 				// are error-worthy so just ignore the rest.
+				continue
+			} else if strings.EqualFold(kv.Key, ":protocol") {
+				// :protocol is a pseudo-header, already handled above
 				continue
 			} else if strings.EqualFold(kv.Key, "cookie") {
 				// Per 8.1.2.5 To allow for better compression efficiency, the
@@ -2671,6 +2734,16 @@ func (rl *clientConnReadLoop) processSettings(f *SettingsFrame) error {
 			cc.cond.Broadcast()
 
 			cc.initialWindowSize = s.Val
+		case SettingEnableConnectProtocol:
+			// RFC 8441: SETTINGS_ENABLE_CONNECT_PROTOCOL
+			// The value MUST be 0 or 1. Any other value MUST be treated
+			// as a connection error of type PROTOCOL_ERROR.
+			if s.Val != 0 && s.Val != 1 {
+				return ConnectionError(ErrCodeProtocol)
+			}
+			cc.enableConnectProtocol = s.Val == 1
+			cc.vlogf("http2: peer %s CONNECT protocol support",
+				map[bool]string{true: "enabled", false: "disabled"}[cc.enableConnectProtocol])
 		default:
 			// TODO(bradfitz): handle more settings? SETTINGS_HEADER_TABLE_SIZE probably.
 			cc.vlogf("Unhandled Setting: %v", s)
