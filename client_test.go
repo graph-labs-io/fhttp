@@ -1711,6 +1711,105 @@ func TestShouldCopyHeaderOnRedirect(t *testing.T) {
 	}
 }
 
+func TestShouldCopyHeaderForMethod(t *testing.T) {
+	tests := []struct {
+		name          string
+		header        string
+		hasBody       bool
+		contentLength int64
+		want          bool
+	}{
+		// Headers that should always be copied
+		{"User-Agent without body", "User-Agent", false, 0, true},
+		{"User-Agent with body", "User-Agent", true, 100, true},
+		{"Authorization without body", "Authorization", false, 0, true},
+		{"Custom-Header without body", "X-Custom", false, 0, true},
+
+		// Body-related headers should not be copied when there's no body
+		{"Content-Type without body", "Content-Type", false, 0, false},
+		{"Content-Type with body", "Content-Type", true, 100, true},
+		{"Content-Encoding without body", "Content-Encoding", false, 0, false},
+		{"Content-Encoding with body", "Content-Encoding", true, 100, true},
+		{"Content-Length without body", "Content-Length", false, 0, false},
+		{"Content-Length with body", "Content-Length", true, 100, true},
+		{"Transfer-Encoding without body", "Transfer-Encoding", false, 0, false},
+		{"Transfer-Encoding with body", "Transfer-Encoding", true, 100, true},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &Request{
+				Method:        "GET",
+				ContentLength: tt.contentLength,
+			}
+			if tt.hasBody {
+				req.Body = io.NopCloser(strings.NewReader("test body"))
+			}
+			got := Export_shouldCopyHeaderForMethod(tt.header, req)
+			if got != tt.want {
+				t.Errorf("shouldCopyHeaderForMethod(%q, hasBody=%v, contentLength=%d) = %v; want %v",
+					tt.header, tt.hasBody, tt.contentLength, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostRedirectDoesNotCopyBodyHeaders(t *testing.T) {
+	setParallel(t)
+	defer afterTest(t)
+
+	var lastRequest *Request
+	ts := httptest.NewServer(HandlerFunc(func(w ResponseWriter, r *Request) {
+		lastRequest = r
+		if r.URL.Path == "/post" {
+			// Redirect POST to GET
+			w.Header().Set("Location", "/get")
+			w.WriteHeader(StatusFound) // 302
+		} else {
+			w.WriteHeader(StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	c := ts.Client()
+	
+	// Make a POST request with Content-Type header
+	req, err := NewRequest("POST", ts.URL+"/post", strings.NewReader("test body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "test-agent")
+	req.Header.Set("X-Custom-Header", "custom-value")
+	
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// The final request should be GET /get
+	if lastRequest.Method != "GET" {
+		t.Errorf("expected final request method to be GET, got %s", lastRequest.Method)
+	}
+	if lastRequest.URL.Path != "/get" {
+		t.Errorf("expected final request path to be /get, got %s", lastRequest.URL.Path)
+	}
+
+	// Content-Type should NOT be present in the GET request
+	if ct := lastRequest.Header.Get("Content-Type"); ct != "" {
+		t.Errorf("expected Content-Type to be absent in GET request, got %q", ct)
+	}
+
+	// User-Agent and custom headers SHOULD still be present
+	if ua := lastRequest.Header.Get("User-Agent"); ua != "test-agent" {
+		t.Errorf("expected User-Agent to be copied to GET request, got %q", ua)
+	}
+	if custom := lastRequest.Header.Get("X-Custom-Header"); custom != "custom-value" {
+		t.Errorf("expected X-Custom-Header to be copied to GET request, got %q", custom)
+	}
+}
+
 func TestClientRedirectTypes(t *testing.T) {
 	setParallel(t)
 	defer afterTest(t)

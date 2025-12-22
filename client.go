@@ -785,7 +785,7 @@ func (c *Client) makeHeadersCopier(ireq *Request) func(*Request) {
 		// Copy the initial request's Header Values
 		// (at least the safe ones).
 		for k, vv := range ireqhdr {
-			if shouldCopyHeaderOnRedirect(k, preq.URL, req.URL) {
+			if shouldCopyHeaderOnRedirect(k, preq.URL, req.URL) && shouldCopyHeaderForMethod(k, req) {
 				req.Header[k] = vv
 			}
 		}
@@ -973,6 +973,20 @@ func shouldCopyHeaderOnRedirect(headerKey string, initial, dest *url.URL) bool {
 		return isDomainOrSubdomain(dhost, ihost)
 	}
 	// All other headers are copied:
+	return true
+}
+
+// shouldCopyHeaderForMethod reports whether a header should be copied
+// based on the request method and whether it has a body.
+func shouldCopyHeaderForMethod(headerKey string, req *Request) bool {
+	// If the request has no body, don't copy body-related headers
+	if req.Body == nil && req.ContentLength == 0 {
+		switch CanonicalHeaderKey(headerKey) {
+		case "Content-Type", "Content-Encoding", "Content-Length", "Transfer-Encoding":
+			// These headers are only relevant for requests with a body
+			return false
+		}
+	}
 	return true
 }
 
