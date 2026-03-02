@@ -33,10 +33,11 @@ import (
 )
 
 var (
-	VerboseLogs    bool
-	logFrameWrites bool
-	logFrameReads  bool
-	inTests        bool
+	VerboseLogs                    bool
+	logFrameWrites                 bool
+	logFrameReads                  bool
+	inTests                        bool
+	disableExtendedConnectProtocol bool
 )
 
 func init() {
@@ -48,6 +49,9 @@ func init() {
 		VerboseLogs = true
 		logFrameWrites = true
 		logFrameReads = true
+	}
+	if strings.Contains(e, "http2xconnect=0") {
+		disableExtendedConnectProtocol = true
 	}
 }
 
@@ -132,16 +136,16 @@ func (s Setting) Valid() error {
 		if s.Val != 1 && s.Val != 0 {
 			return ConnectionError(ErrCodeProtocol)
 		}
-	case SettingEnableConnectProtocol:
-		if s.Val != 1 && s.Val != 0 {
-			return ConnectionError(ErrCodeProtocol)
-		}
 	case SettingInitialWindowSize:
 		if s.Val > 1<<31-1 {
 			return ConnectionError(ErrCodeFlowControl)
 		}
 	case SettingMaxFrameSize:
 		if s.Val < 16384 || s.Val > 1<<24-1 {
+			return ConnectionError(ErrCodeProtocol)
+		}
+	case SettingEnableConnectProtocol:
+		if s.Val != 1 && s.Val != 0 {
 			return ConnectionError(ErrCodeProtocol)
 		}
 	}

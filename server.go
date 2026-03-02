@@ -1926,7 +1926,7 @@ func (c *conn) serve(ctx context.Context) {
 					return
 				}
 				publicErr := "400 Bad Request"
-				fmt.Fprintf(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
+				fmt.Fprint(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
 				return
 			}
 		}
