@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/andybalholm/brotli v1.2.0
-	github.com/graph-labs-io/utls v0.0.0-20260302142739-7609168f52ed
+	github.com/graph-labs-io/utls v0.0.0-20260302143918-245dbf914aa5
 	github.com/klauspost/compress v1.18.4
 	golang.org/x/net v0.49.0
 	golang.org/x/term v0.40.0
