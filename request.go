@@ -322,8 +322,6 @@ type Request struct {
 	// It is unexported to prevent people from using Context wrong
 	// and mutating the contexts held by callers of the same request.
 	ctx context.Context
-
-	DontSanitizeCookie bool
 }
 
 // Context returns the request's context. To change the context, use
@@ -435,12 +433,7 @@ func (r *Request) Cookie(name string) (*Cookie, error) {
 // AddCookie only sanitizes c's name and value, and does not sanitize
 // a Cookie header already present in the request.
 func (r *Request) AddCookie(c *Cookie) {
-	var s string
-	if r.DontSanitizeCookie {
-		s = fmt.Sprintf("%s=%s", c.Name, c.Value)
-	} else {
-		s = fmt.Sprintf("%s=%s", sanitizeCookieName(c.Name), sanitizeCookieValue(c.Value))
-	}
+	s := fmt.Sprintf("%s=%s", sanitizeCookieName(c.Name), sanitizeCookieValue(c.Value, c.Quoted))
 	if c := r.Header.Get("Cookie"); c != "" {
 		r.Header.Set("Cookie", c+"; "+s)
 	} else {
