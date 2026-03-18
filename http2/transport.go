@@ -1424,23 +1424,18 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 		hdrs = hdrs[len(chunk):]
 		endHeaders := len(hdrs) == 0
 		if first {
-			defaultHeaderPriorityParam := PriorityParam{
-				Exclusive: true,
-				Weight:    255,
-				StreamDep: 0,
-			}
-
-			if cc.t.HeaderPriority != nil {
-				defaultHeaderPriorityParam = *cc.t.HeaderPriority
-			}
-
-			cc.fr.WriteHeaders(HeadersFrameParam{
+			headersParamFrame := HeadersFrameParam{
 				StreamID:      streamID,
 				BlockFragment: chunk,
 				EndStream:     endStream,
 				EndHeaders:    endHeaders,
-				Priority:      defaultHeaderPriorityParam,
-			})
+			}
+
+			if cc.t.HeaderPriority != nil {
+				headersParamFrame.Priority = *cc.t.HeaderPriority
+			}
+
+			cc.fr.WriteHeaders(headersParamFrame)
 			first = false
 		} else {
 			cc.fr.WriteContinuation(streamID, endHeaders, chunk)
