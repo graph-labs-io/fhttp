@@ -3058,10 +3058,27 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 }
 
 func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
-	w := new(bytes.Buffer)
-	w.Write(b)
-	io.Copy(w, r)
-	defer r.Close()
+	return &prependReader{
+		prefix: bytes.NewReader(b),
+		body:   r,
+	}
+}
 
-	return io.NopCloser(w)
+type prependReader struct {
+	prefix *bytes.Reader
+	body   io.ReadCloser
+}
+
+func (pr *prependReader) Read(p []byte) (int, error) {
+	if pr.prefix.Len() > 0 {
+		n, err := pr.prefix.Read(p)
+		if n > 0 || err != io.EOF {
+			return n, err
+		}
+	}
+	return pr.body.Read(p)
+}
+
+func (pr *prependReader) Close() error {
+	return pr.body.Close()
 }
