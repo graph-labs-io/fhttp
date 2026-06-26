@@ -109,9 +109,15 @@ type entry struct {
 	seqNum uint64
 }
 
-// id returns the domain;path;name triple of e as an id.
+// id returns the hostOnly;domain;path;name tuple of e as an id.
+//
+// The host-only flag is part of the identity because a host-only cookie
+// (set with no Domain attribute) and a domain cookie of the same
+// name/domain/path are distinct cookies per RFC 6265bis and in browsers.
+// Omitting it lets a host-only "Max-Age=0" delete clobber a domain-scoped
+// cookie of the same name (and vice versa), which diverges from the browser.
 func (e *entry) id() string {
-	return fmt.Sprintf("%s;%s;%s", e.Domain, e.Path, e.Name)
+	return fmt.Sprintf("%t;%s;%s;%s", e.HostOnly, e.Domain, e.Path, e.Name)
 }
 
 // shouldSend determines whether e's cookie qualifies to be included in a
