@@ -99,6 +99,7 @@ type entry struct {
 	HttpOnly   bool
 	Persistent bool
 	HostOnly   bool
+	Quoted     bool
 	Expires    time.Time
 	Creation   time.Time
 	LastAccess time.Time
@@ -109,9 +110,15 @@ type entry struct {
 	seqNum uint64
 }
 
-// id returns the domain;path;name triple of e as an id.
+// id returns the hostOnly;domain;path;name tuple of e as an id.
+//
+// The host-only flag is part of the identity because a host-only cookie
+// (set with no Domain attribute) and a domain cookie of the same
+// name/domain/path are distinct cookies per RFC 6265bis and in browsers.
+// Omitting it lets a host-only "Max-Age=0" delete clobber a domain-scoped
+// cookie of the same name (and vice versa), which diverges from the browser.
 func (e *entry) id() string {
-	return fmt.Sprintf("%s;%s;%s", e.Domain, e.Path, e.Name)
+	return fmt.Sprintf("%t;%s;%s;%s", e.HostOnly, e.Domain, e.Path, e.Name)
 }
 
 // shouldSend determines whether e's cookie qualifies to be included in a
@@ -221,6 +228,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 		cookies = append(cookies, &http.Cookie{
 			Name:     e.Name,
 			Value:    e.Value,
+			Quoted:   e.Quoted,
 			Path:     e.Path,
 			Domain:   e.Domain,
 			Expires:  e.Expires,
@@ -298,6 +306,121 @@ func (j *Jar) setCookies(u *url.URL, cookies []*http.Cookie, now time.Time) {
 		} else {
 			j.entries[key] = submap
 		}
+	}
+}
+
+// AllCookies returns every cookie currently stored in the jar with full
+// attributes (including the HostOnly flag and exact Domain), independent of any
+// request URL. Persistent cookies carry their Expires; session (non-persistent)
+// cookies are returned with a zero Expires so callers can distinguish and drop
+// them. This is the export counterpart of LoadCookies and is intended for
+// persisting a jar the way a browser persists cookies for a site.
+func (j *Jar) AllCookies() []*http.Cookie {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	var cookies []*http.Cookie
+	for _, submap := range j.entries {
+		for _, e := range submap {
+			c := &http.Cookie{
+				Name:     e.Name,
+				Value:    e.Value,
+				Quoted:   e.Quoted,
+				Domain:   e.Domain,
+				Path:     e.Path,
+				Secure:   e.Secure,
+				HttpOnly: e.HttpOnly,
+				HostOnly: e.HostOnly,
+			}
+
+			if e.Persistent {
+				c.Expires = e.Expires
+			}
+
+			switch e.SameSite {
+			case "SameSite":
+				c.SameSite = http.SameSiteDefaultMode
+			case "SameSite=Lax":
+				c.SameSite = http.SameSiteLaxMode
+			case "SameSite=Strict":
+				c.SameSite = http.SameSiteStrictMode
+			}
+
+			cookies = append(cookies, c)
+		}
+	}
+
+	return cookies
+}
+
+// LoadCookies inserts cookies directly into the jar as entries, preserving each
+// cookie's HostOnly flag and exact Domain regardless of any request URL. It is
+// the inverse of AllCookies and restores a persisted jar exactly as it was, so a
+// host-only cookie and a domain cookie of the same name stay distinct. Cookies
+// with an empty Domain, or whose Expires is already in the past, are skipped.
+func (j *Jar) LoadCookies(cookies []*http.Cookie) {
+	now := time.Now()
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	for _, c := range cookies {
+		domain := strings.ToLower(c.Domain)
+		if domain == "" {
+			continue
+		}
+
+		e := entry{
+			Name:       c.Name,
+			Value:      c.Value,
+			Quoted:     c.Quoted,
+			Domain:     domain,
+			Path:       c.Path,
+			Secure:     c.Secure,
+			HttpOnly:   c.HttpOnly,
+			HostOnly:   c.HostOnly,
+			Creation:   now,
+			LastAccess: now,
+		}
+
+		if c.Expires.IsZero() {
+			e.Expires = endOfTime
+			e.Persistent = false
+		} else {
+			if !c.Expires.After(now) {
+				continue
+			}
+			e.Expires = c.Expires
+			e.Persistent = true
+		}
+
+		switch c.SameSite {
+		case http.SameSiteDefaultMode:
+			e.SameSite = "SameSite"
+		case http.SameSiteLaxMode:
+			e.SameSite = "SameSite=Lax"
+		case http.SameSiteStrictMode:
+			e.SameSite = "SameSite=Strict"
+		}
+
+		key := jarKey(domain, j.psList)
+
+		submap := j.entries[key]
+		if submap == nil {
+			submap = make(map[string]entry)
+		}
+
+		id := e.id()
+		if old, ok := submap[id]; ok {
+			e.Creation = old.Creation
+			e.seqNum = old.seqNum
+		} else {
+			e.seqNum = j.nextSeqNum
+			j.nextSeqNum++
+		}
+
+		submap[id] = e
+		j.entries[key] = submap
 	}
 }
 
@@ -425,6 +548,7 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 	}
 
 	e.Value = c.Value
+	e.Quoted = c.Quoted
 	e.Secure = c.Secure
 	e.HttpOnly = c.HttpOnly
 

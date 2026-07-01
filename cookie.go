@@ -33,6 +33,10 @@ type Cookie struct {
 	MaxAge   int
 	Secure   bool
 	HttpOnly bool
+	// HostOnly is not a wire attribute; it is preserved only so a jar can be
+	// exported and restored with host-only cookies kept distinct from domain
+	// cookies of the same name. It is ignored by SetCookies/String.
+	HostOnly bool
 	SameSite SameSite
 	Raw      string
 	Unparsed []string // Raw text of unparsed attribute-value pairs
