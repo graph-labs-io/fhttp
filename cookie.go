@@ -144,8 +144,11 @@ func readSetCookies(h Header) []*Cookie {
 				if err != nil {
 					exptime, err = time.Parse("Mon, 02-Jan-2006 15:04:05 MST", val)
 					if err != nil {
-						c.Expires = time.Time{}
-						break
+						exptime, err = time.Parse("Mon, 02-Jan-06 15:04:05 MST", val)
+						if err != nil {
+							c.Expires = time.Time{}
+							break
+						}
 					}
 				}
 				c.Expires = exptime.UTC()
