@@ -1322,3 +1322,34 @@ func TestIssue19384(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteRoundTripHostOnly(t *testing.T) {
+	jar, _ := New(nil)
+	u, _ := url.Parse("https://www.example.com/a/b")
+	resp := &http.Response{Header: http.Header{"Set-Cookie": {
+		"KP=host; Path=/; HttpOnly",
+		"KP=dom; Domain=www.example.com; Path=/",
+	}}}
+	jar.SetCookies(u, resp.Cookies())
+
+	if got := len(jar.Cookies(u)); got != 2 {
+		t.Fatalf("expected host-only and domain cookie to coexist, got %d", got)
+	}
+
+	for _, c := range jar.Cookies(u) {
+		if !c.HostOnly {
+			continue
+		}
+		jar.SetCookies(u, []*http.Cookie{{Name: c.Name, Path: c.Path, Domain: c.Domain, HostOnly: c.HostOnly, MaxAge: -1}})
+	}
+
+	got := jar.Cookies(u)
+	if len(got) != 1 || got[0].Value != "dom" || got[0].HostOnly {
+		t.Fatalf("round-trip delete of the host-only cookie should leave only the domain cookie, got %v", got)
+	}
+
+	jar.SetCookies(u, []*http.Cookie{{Name: got[0].Name, Path: got[0].Path, Domain: got[0].Domain, HostOnly: got[0].HostOnly, MaxAge: -1}})
+	if left := jar.Cookies(u); len(left) != 0 {
+		t.Fatalf("round-trip delete of the domain cookie failed, left %v", left)
+	}
+}

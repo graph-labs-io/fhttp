@@ -234,6 +234,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 			Expires:  e.Expires,
 			Secure:   e.Secure,
 			HttpOnly: e.HttpOnly,
+			HostOnly: e.HostOnly,
 		})
 	}
 
@@ -526,6 +527,9 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 	e.Domain, e.HostOnly, err = j.domainAndType(host, c.Domain)
 	if err != nil {
 		return e, false, err
+	}
+	if c.HostOnly && e.Domain == host {
+		e.HostOnly = true
 	}
 
 	// MaxAge takes precedence over Expires.
